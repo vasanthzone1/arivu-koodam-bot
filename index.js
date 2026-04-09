@@ -19,12 +19,12 @@ const fs = require('fs');
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ================== GLOBAL DATA ==================
+// ================== DATA STORAGE ==================
 let questions = [];
 let responses = [];
 let userScores = {};
 
-// ================== CSV SOURCE ==================
+// ================== CSV URL ==================
 const CSV_URL = "https://raw.githubusercontent.com/vasanthzone1/arivu-koodam-bot/main/questions.csv";
 
 // ================== LOAD QUESTIONS ==================
@@ -51,7 +51,7 @@ function loadQuestions() {
 setTimeout(loadQuestions, 3000);
 setInterval(loadQuestions, 10 * 60 * 1000);
 
-// ================== START ==================
+// ================== START COMMAND ==================
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(msg.chat.id,
     "🤖 Vanakkam Makkale!\n\n𝗔𝗥𝗜𝗩𝗨 𝗞𝗢𝗢𝗗𝗔𝗠 📚\n\nUse /quiz to start!"
@@ -91,22 +91,22 @@ function runQuiz(chatId, slot) {
   sendQuestion(chatId, quizSet, 0, slot);
 }
 
-// ================== SEND QUESTION (POLLS) ==================
+// ================== SEND QUESTION (POLL MODE) ==================
 function sendQuestion(chatId, quizSet, index, slot) {
 
   if (index >= quizSet.length) {
+
     bot.sendMessage(chatId, "✅ Quiz Completed!");
 
-    // Show simple result
-    const topUsers = Object.entries(userScores)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-
+    // Leaderboard
     let leaderboard = "🏆 *Leaderboard*\n\n";
 
-    topUsers.forEach(([user, score], i) => {
-      leaderboard += `${i + 1}. ${user} - ${score} pts\n`;
-    });
+    Object.entries(userScores)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .forEach(([user, score], i) => {
+        leaderboard += `${i + 1}. ${user} - ${score} pts\n`;
+      });
 
     bot.sendMessage(chatId, leaderboard, { parse_mode: "Markdown" });
     return;
@@ -133,13 +133,11 @@ function sendQuestion(chatId, quizSet, index, slot) {
       correct_option_id: correctIndex,
       is_anonymous: false
     }
-  ).then(() => {
+  );
 
-    setTimeout(() => {
-      sendQuestion(chatId, quizSet, index + 1, slot);
-    }, 15000);
-
-  }).catch(err => console.log("Poll Error:", err));
+  setTimeout(() => {
+    sendQuestion(chatId, quizSet, index + 1, slot);
+  }, 15000);
 }
 
 // ================== POLL ANSWER TRACKING ==================
@@ -149,20 +147,24 @@ bot.on('poll_answer', (answer) => {
   const name = answer.user.first_name;
   const selected = answer.option_ids[0];
 
-  if (!userScores[userId]) {
-    userScores[userId] = 0;
+  // Track basic response
+  responses.push({
+    name,
+    userId,
+    selected
+  });
+
+  // Score tracking (simple logic)
+  if (!userScores[name]) {
+    userScores[name] = 0;
   }
 
-  responses.push({
-    name: name,
-    userId: userId,
-    selected: selected
-  });
+  userScores[name] += 1; // (you can refine this with correct check)
 
   console.log(`📊 ${name} answered option ${selected}`);
 });
 
-// ================== REPORT DOWNLOAD ==================
+// ================== REPORT ==================
 bot.onText(/\/report/, (msg) => {
 
   if (responses.length === 0) {
@@ -190,26 +192,23 @@ setInterval(() => {
   const minute = now.getMinutes();
 
   if (hour === 8 && minute === 0) {
-    runAuto("Morning");
+    broadcastQuiz("Morning");
   }
 
   if (hour === 16 && minute === 0) {
-    runAuto("Evening");
+    broadcastQuiz("Evening");
   }
 
 }, 60000);
 
-// ================== AUTO QUIZ ==================
-function runAuto(slot) {
-  const today = new Date().toISOString().split('T')[0];
+// ================== BROADCAST ==================
+function broadcastQuiz(slot) {
 
-  const quizSet = questions.filter(q =>
-    q.Date === today && q.Slot === slot
-  );
+  console.log(`🚀 Starting ${slot} quiz`);
 
   const chatIds = [...new Set(responses.map(r => r.userId))];
 
-  chatIds.forEach(id => {
-    runQuiz(id, slot);
+  chatIds.forEach(chatId => {
+    runQuiz(chatId, slot);
   });
 }
