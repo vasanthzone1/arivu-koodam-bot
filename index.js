@@ -2,14 +2,10 @@
 const express = require('express');
 const app = express();
 
-app.get('/', (req, res) => {
-  res.send('Bot is running 🚀');
-});
+app.get('/', (req, res) => res.send('Bot is running 🚀'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🌐 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
 
 // ================== BOT SETUP ==================
 const TelegramBot = require('node-telegram-bot-api');
@@ -21,15 +17,14 @@ const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 // ================== GLOBAL DATA ==================
 let questions = [];
 let userScores = {};
-let pollMap = {}; // pollId -> correctIndex
+let pollMap = {};
+let answeredMap = {};
 
-// ================== CSV SOURCE ==================
+// ================== CSV ==================
 const CSV_URL = "https://raw.githubusercontent.com/vasanthzone1/arivu-koodam-bot/main/questions.csv";
 
 // ================== LOAD QUESTIONS ==================
 function loadQuestions() {
-  console.log("🔄 Loading questions...");
-
   https.get(CSV_URL, (res) => {
     let temp = [];
 
@@ -39,9 +34,8 @@ function loadQuestions() {
         questions = temp;
         console.log("✅ Questions Loaded:", questions.length);
       });
-
   }).on('error', (err) => {
-    console.log("🌐 Network Error:", err.message);
+    console.log("🌐 Error:", err.message);
     setTimeout(loadQuestions, 30000);
   });
 }
@@ -67,22 +61,20 @@ bot.onText(/\/quiz/, (msg) => {
     }
   });
 
-  bot.once('message', (msg) => {
-    const slot = msg.text;
-    runQuiz(chatId, slot);
-  });
+  bot.once('message', (msg) => runQuiz(chatId, msg.text));
 });
 
 // ================== RUN QUIZ ==================
 function runQuiz(chatId, slot) {
+
   const today = new Date().toISOString().split('T')[0];
 
   const quizSet = questions.filter(q =>
     q.Date === today && q.Slot === slot
   );
 
-  if (quizSet.length === 0) {
-    bot.sendMessage(chatId, `❌ No quiz available for ${slot}`);
+  if (!quizSet.length) {
+    bot.sendMessage(chatId, `❌ No quiz for ${slot}`);
     return;
   }
 
@@ -96,17 +88,16 @@ function sendQuestion(chatId, quizSet, index) {
 
     bot.sendMessage(chatId, "✅ Quiz Completed!");
 
-    const topUsers = Object.entries(userScores)
+    const leaderboard = Object.entries(userScores)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
+      .slice(0, 5)
+      .map(([user, score], i) => `${i + 1}. ${user} - ${score} pts`)
+      .join("\n");
 
-    let leaderboard = "🏆 *Leaderboard*\n\n";
-
-    topUsers.forEach(([user, score], i) => {
-      leaderboard += `${i + 1}. ${user} - ${score} pts\n`;
+    bot.sendMessage(chatId, "🏆 *Leaderboard*\n\n" + leaderboard, {
+      parse_mode: "Markdown"
     });
 
-    bot.sendMessage(chatId, leaderboard, { parse_mode: "Markdown" });
     return;
   }
 
@@ -118,7 +109,7 @@ function sendQuestion(chatId, quizSet, index) {
     q.Option3,
     q.Option4,
     q.Option5
-  ].filter(opt => opt && opt.trim() !== '');
+  ].filter(Boolean);
 
   const correctIndex = parseInt(q.CorrectOption) - 1;
 
@@ -133,38 +124,47 @@ function sendQuestion(chatId, quizSet, index) {
     }
   ).then((sent) => {
 
-    // Store correct answer
-    pollMap[sent.poll.id] = correctIndex;
+    pollMap[sent.poll.id] = {
+      correctIndex
+    };
 
-    // Timer (40 seconds)
+    answeredMap[sent.poll.id] = new Set();
+
+    // ================== TIMER ==================
     let timeLeft = 40;
 
-    bot.sendMessage(chatId, `⏳ Time Left: ${timeLeft}s`).then((msg) => {
+    bot.sendMessage(chatId, `⏳ Time Left: ${timeLeft}s`)
+      .then((msg) => {
 
-      const interval = setInterval(() => {
-        timeLeft--;
+        const interval = setInterval(() => {
+          timeLeft--;
 
-        if (timeLeft > 0) {
-          bot.editMessageText(`⏳ Time Left: ${timeLeft}s`, {
-            chat_id: chatId,
-            message_id: msg.message_id
-          });
-        } else {
-          clearInterval(interval);
+          if (timeLeft <= 0) {
+            clearInterval(interval);
 
-          bot.editMessageText(`⏰ Time's up!`, {
-            chat_id: chatId,
-            message_id: msg.message_id
-          });
+            safeEdit(chatId, msg.message_id, "⏰ Time's up!");
 
-          sendQuestion(chatId, quizSet, index + 1);
-        }
+            sendQuestion(chatId, quizSet, index + 1);
+            return;
+          }
 
-      }, 1000);
+          safeEdit(chatId, msg.message_id, `⏳ Time Left: ${timeLeft}s`);
 
-    });
+        }, 1000);
 
-  }).catch(err => console.log("Poll Error:", err));
+      });
+
+  });
+}
+
+// ================== SAFE EDIT ==================
+function safeEdit(chatId, messageId, text) {
+  bot.editMessageText(text, {
+    chat_id: chatId,
+    message_id: messageId
+  }).catch(() => {
+    // Ignore edit errors (Telegram limits)
+  });
 }
 
 // ================== ANSWER HANDLING ==================
@@ -175,19 +175,27 @@ bot.on('poll_answer', (answer) => {
   const selected = answer.option_ids[0];
   const pollId = answer.poll_id;
 
-  const correctIndex = pollMap[pollId];
+  const pollData = pollMap[pollId];
 
-  if (correctIndex === undefined) return;
+  if (!pollData) return;
 
   if (!userScores[userId]) {
     userScores[userId] = 0;
   }
 
-  if (selected === correctIndex) {
+  if (!answeredMap[pollId]) {
+    answeredMap[pollId] = new Set();
+  }
+
+  if (answeredMap[pollId].has(userId)) return;
+
+  answeredMap[pollId].add(userId);
+
+  if (selected === pollData.correctIndex) {
     userScores[userId] += 1;
-    console.log(`✅ ${name} got correct answer`);
+    console.log(`✅ ${name} correct`);
   } else {
-    console.log(`❌ ${name} got wrong answer`);
+    console.log(`❌ ${name} wrong`);
   }
 
 });
