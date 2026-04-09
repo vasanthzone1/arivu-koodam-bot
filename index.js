@@ -138,7 +138,7 @@ function sendQuestion(chatId, quizSet, index) {
     answeredMap[sent.poll.id] = new Set();
 
     // ================== TIMER (SAFE VERSION) ==================
-    let timeLeft = 40;
+    let timeLeft = 30;
 
     bot.sendMessage(chatId, `⏳ Time Left: ${timeLeft}s`).then((msg) => {
 
