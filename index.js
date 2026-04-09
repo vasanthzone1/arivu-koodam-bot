@@ -11,14 +11,14 @@ app.listen(PORT, () => {
   console.log(`🌐 Server running on port ${PORT}`);
 });
 
-// ================== BOT SETUP ==================
+// ================== BOT ==================
 const TelegramBot = require('node-telegram-bot-api');
 const https = require('https');
 const csv = require('csv-parser');
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ================== GLOBAL DATA ==================
+// ================== DATA ==================
 let questions = [];
 let userScores = {};
 let pollMap = {};
@@ -39,20 +39,16 @@ function loadQuestions() {
         console.log("✅ Questions Loaded:", questions.length);
       });
 
-  }).on('error', (err) => {
-    console.log("🌐 Error:", err.message);
+  }).on('error', () => {
     setTimeout(loadQuestions, 30000);
   });
 }
 
 setTimeout(loadQuestions, 3000);
-setInterval(loadQuestions, 10 * 60 * 1000);
 
 // ================== START ==================
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id,
-    "🤖 Vanakkam Makkale!\n\n𝗔𝗥𝗜𝗩𝗨 𝗞𝗢𝗢𝗗𝗔𝗠 📚\n\nUse /quiz to start!"
-  );
+  bot.sendMessage(msg.chat.id, "🤖 Welcome Makkale! Use /quiz");
 });
 
 // ================== QUIZ ==================
@@ -92,12 +88,17 @@ function sendQuestion(chatId, quizSet, index) {
 
   if (index >= quizSet.length) {
 
-    bot.sendMessage(chatId, "✅ Quiz Completed!");
-
+    // ✅ FIXED LEADERBOARD
     const leaderboard = Object.entries(userScores)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([user, score], i) => `${i + 1}. ${user} - ${score} pts`)
+      .map(([userId, score], i) => {
+        const user = userId.split('|');
+        const name = user[0];
+        const username = user[1];
+
+        return `${i + 1}. ${name}${username ? ' (@' + username + ')' : ''} - ${score} pts`;
+      })
       .join("\n");
 
     bot.sendMessage(chatId, "🏆 *Leaderboard*\n\n" + leaderboard, {
@@ -130,14 +131,10 @@ function sendQuestion(chatId, quizSet, index) {
     }
   ).then((sent) => {
 
-    // Store poll data
-    pollMap[sent.poll.id] = {
-      correctIndex
-    };
-
+    pollMap[sent.poll.id] = { correctIndex };
     answeredMap[sent.poll.id] = new Set();
 
-    // ================== TIMER (SAFE VERSION) ==================
+    // ================== TIMER (30 SECONDS) ==================
     let timeLeft = 30;
 
     bot.sendMessage(chatId, `⏳ Time Left: ${timeLeft}s`).then((msg) => {
@@ -171,42 +168,39 @@ function safeEdit(chatId, messageId, text) {
   bot.editMessageText(text, {
     chat_id: chatId,
     message_id: messageId
-  }).catch(() => {
-    // Ignore Telegram rate limit errors
-  });
+  }).catch(() => {});
 }
 
 // ================== ANSWER HANDLING ==================
 bot.on('poll_answer', (answer) => {
 
   const userId = answer.user.id;
-  const name = answer.user.first_name;
+  const name = answer.user.first_name || "User";
+  const username = answer.user.username || "";
   const selected = answer.option_ids[0];
   const pollId = answer.poll_id;
 
   const pollData = pollMap[pollId];
-
   if (!pollData) return;
 
-  if (!userScores[userId]) {
-    userScores[userId] = 0;
+  // ✅ Store as "Name|username"
+  const userKey = `${name}|${username}`;
+
+  if (!userScores[userKey]) {
+    userScores[userKey] = 0;
   }
 
   if (!answeredMap[pollId]) {
     answeredMap[pollId] = new Set();
   }
 
-  // Prevent duplicate scoring
-  if (answeredMap[pollId].has(userId)) return;
+  if (answeredMap[pollId].has(userKey)) return;
 
-  answeredMap[pollId].add(userId);
+  answeredMap[pollId].add(userKey);
 
-  // Score only correct answer
+  // ✅ SCORE ONLY IF CORRECT
   if (selected === pollData.correctIndex) {
-    userScores[userId] += 1;
-    console.log(`✅ ${name} correct`);
-  } else {
-    console.log(`❌ ${name} wrong`);
+    userScores[userKey] += 1;
   }
 
 });
