@@ -1,4 +1,4 @@
-// ================== SERVER (Required for Render) ==================
+// ================== SERVER (Render Requirement) ==================
 const express = require('express');
 const app = express();
 
@@ -15,12 +15,14 @@ app.listen(PORT, () => {
 const TelegramBot = require('node-telegram-bot-api');
 const https = require('https');
 const csv = require('csv-parser');
+const fs = require('fs');
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
 let questions = [];
+let responses = [];
 
-// ✅ GitHub RAW CSV
+// ✅ GitHub CSV
 const CSV_URL = "https://raw.githubusercontent.com/vasanthzone1/arivu-koodam-bot/main/questions.csv";
 
 // ================== LOAD QUESTIONS ==================
@@ -40,15 +42,13 @@ function loadQuestions() {
 
   }).on('error', (err) => {
     console.log("🌐 Network Error:", err.message);
-    console.log("⏳ Retrying in 30 seconds...");
+    console.log("⏳ Retrying in 30 sec...");
     setTimeout(loadQuestions, 30000);
   });
 }
 
-// Initial load
+// Initial + periodic load
 setTimeout(loadQuestions, 3000);
-
-// Reload every 10 mins
 setInterval(loadQuestions, 10 * 60 * 1000);
 
 // ================== BOT COMMANDS ==================
@@ -56,11 +56,11 @@ setInterval(loadQuestions, 10 * 60 * 1000);
 // Start
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(msg.chat.id,
-    "🤖 Vanakkam Makkale!\n\n𝗔𝗥𝗜𝗩𝗨 𝗞𝗢𝗢𝗗𝗔𝗠 📚 is Live 🎯\n\nUse /quiz to start!"
+    "🤖 Vanakkam Makkale!\n\n𝗔𝗥𝗜𝗩𝗨 𝗞𝗢𝗢𝗗𝗔𝗠 📚 Live 🎯\n\nUse /quiz to start!"
   );
 });
 
-// Manual Quiz
+// Quiz command
 bot.onText(/\/quiz/, (msg) => {
   const chatId = msg.chat.id;
 
@@ -80,7 +80,6 @@ bot.onText(/\/quiz/, (msg) => {
 // ================== QUIZ LOGIC ==================
 
 function runQuiz(chatId, slot) {
-
   const today = new Date().toISOString().split('T')[0];
 
   const quizSet = questions.filter(q =>
@@ -95,7 +94,6 @@ function runQuiz(chatId, slot) {
   sendQuestion(chatId, quizSet, 0, slot);
 }
 
-// Question Flow
 function sendQuestion(chatId, quizSet, index, slot) {
 
   if (index >= quizSet.length) {
@@ -122,14 +120,51 @@ function sendQuestion(chatId, quizSet, index, slot) {
   );
 
   bot.once('message', (msg) => {
+
     const answer = msg.text;
     const correct = q[`Option${q.CorrectOption}`];
 
-    console.log(`User: ${msg.from.first_name} | Answer: ${answer} | Correct: ${correct}`);
+    // ✅ Store response
+    responses.push({
+      name: msg.from.first_name,
+      userId: msg.from.id,
+      question: q.Question,
+      selected: answer,
+      correctAnswer: correct,
+      status: answer === correct ? "Correct" : "Wrong",
+      date: new Date().toISOString().split('T')[0],
+      slot: slot
+    });
 
     sendQuestion(chatId, quizSet, index + 1, slot);
   });
 }
+
+// ================== REPORT DOWNLOAD ==================
+
+bot.onText(/\/report/, (msg) => {
+
+  const chatId = msg.chat.id;
+
+  if (responses.length === 0) {
+    bot.sendMessage(chatId, "❌ No data available yet");
+    return;
+  }
+
+  let csvData = "Name,UserID,Question,Selected,CorrectAnswer,Status,Date,Slot\n";
+
+  responses.forEach(r => {
+    csvData += `"${r.name}","${r.userId}","${r.question}","${r.selected}","${r.correctAnswer}","${r.status}","${r.date}","${r.slot}"\n`;
+  });
+
+  const fileName = "quiz_report.csv";
+
+  fs.writeFileSync(fileName, csvData);
+
+  bot.sendDocument(chatId, fileName).then(() => {
+    console.log("📊 Report sent");
+  });
+});
 
 // ================== AUTO SCHEDULER ==================
 
@@ -139,19 +174,17 @@ setInterval(() => {
   const hour = now.getHours();
   const minute = now.getMinutes();
 
-  // ⏰ 8 AM
   if (hour === 8 && minute === 0) {
     broadcastQuiz("Morning");
   }
 
-  // ⏰ 4 PM
   if (hour === 16 && minute === 0) {
     broadcastQuiz("Evening");
   }
 
 }, 60000);
 
-// Broadcast to all users
+// Broadcast quiz
 function broadcastQuiz(slot) {
 
   bot.getUpdates().then(updates => {
@@ -160,7 +193,7 @@ function broadcastQuiz(slot) {
       updates.map(u => u.message?.chat.id).filter(Boolean)
     )];
 
-    console.log(`🚀 Starting ${slot} quiz for users:`, users.length);
+    console.log(`🚀 Starting ${slot} quiz for ${users.length} users`);
 
     users.forEach(chatId => {
       runQuiz(chatId, slot);
