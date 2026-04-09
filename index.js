@@ -2,10 +2,14 @@
 const express = require('express');
 const app = express();
 
-app.get('/', (req, res) => res.send('Bot is running 🚀'));
+app.get('/', (req, res) => {
+  res.send('Bot is running 🚀');
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on port ${PORT}`);
+});
 
 // ================== BOT SETUP ==================
 const TelegramBot = require('node-telegram-bot-api');
@@ -34,6 +38,7 @@ function loadQuestions() {
         questions = temp;
         console.log("✅ Questions Loaded:", questions.length);
       });
+
   }).on('error', (err) => {
     console.log("🌐 Error:", err.message);
     setTimeout(loadQuestions, 30000);
@@ -61,12 +66,13 @@ bot.onText(/\/quiz/, (msg) => {
     }
   });
 
-  bot.once('message', (msg) => runQuiz(chatId, msg.text));
+  bot.once('message', (msg) => {
+    runQuiz(chatId, msg.text);
+  });
 });
 
 // ================== RUN QUIZ ==================
 function runQuiz(chatId, slot) {
-
   const today = new Date().toISOString().split('T')[0];
 
   const quizSet = questions.filter(q =>
@@ -124,35 +130,38 @@ function sendQuestion(chatId, quizSet, index) {
     }
   ).then((sent) => {
 
+    // Store poll data
     pollMap[sent.poll.id] = {
       correctIndex
     };
 
     answeredMap[sent.poll.id] = new Set();
 
-    // ================== TIMER ==================
+    // ================== TIMER (SAFE VERSION) ==================
     let timeLeft = 40;
 
-    bot.sendMessage(chatId, `⏳ Time Left: ${timeLeft}s`)
-      .then((msg) => {
+    bot.sendMessage(chatId, `⏳ Time Left: ${timeLeft}s`).then((msg) => {
 
-        const interval = setInterval(() => {
-          timeLeft--;
+      const interval = setInterval(() => {
+        timeLeft -= 5;
 
-          if (timeLeft <= 0) {
-            clearInterval(interval);
+        if (timeLeft <= 0) {
+          clearInterval(interval);
 
-            safeEdit(chatId, msg.message_id, "⏰ Time's up!");
+          safeEdit(chatId, msg.message_id, "⏰ Time's up!");
 
+          setTimeout(() => {
             sendQuestion(chatId, quizSet, index + 1);
-            return;
-          }
+          }, 1000);
 
-          safeEdit(chatId, msg.message_id, `⏳ Time Left: ${timeLeft}s`);
+          return;
+        }
 
-        }, 1000);
+        safeEdit(chatId, msg.message_id, `⏳ Time Left: ${timeLeft}s`);
 
-      });
+      }, 5000);
+
+    });
 
   });
 }
@@ -163,7 +172,7 @@ function safeEdit(chatId, messageId, text) {
     chat_id: chatId,
     message_id: messageId
   }).catch(() => {
-    // Ignore edit errors (Telegram limits)
+    // Ignore Telegram rate limit errors
   });
 }
 
@@ -187,10 +196,12 @@ bot.on('poll_answer', (answer) => {
     answeredMap[pollId] = new Set();
   }
 
+  // Prevent duplicate scoring
   if (answeredMap[pollId].has(userId)) return;
 
   answeredMap[pollId].add(userId);
 
+  // Score only correct answer
   if (selected === pollData.correctIndex) {
     userScores[userId] += 1;
     console.log(`✅ ${name} correct`);
